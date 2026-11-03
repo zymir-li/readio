@@ -65,6 +65,9 @@ pub struct App {
     pub library: Library,
     pub tick: u64,
     pub quit: bool,
+    /// Temporarily hand mouse selection back to the terminal.
+    pub selection_mode: bool,
+    selection_resume: bool,
     show_help: bool,
     session_facts: crate::session::Facts,
     preview_job: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
@@ -301,6 +304,8 @@ impl App {
             library,
             tick: 0,
             quit: false,
+            selection_mode: false,
+            selection_resume: false,
             show_help: false,
             session_facts: crate::session::Facts::current(),
             preview_job: None,
@@ -479,6 +484,10 @@ impl App {
     }
 
     pub fn on_tick(&mut self) {
+        if self.selection_mode {
+            self.last_frame = Instant::now();
+            return;
+        }
         let now = Instant::now();
         let dt = now.duration_since(self.last_frame).as_secs_f32() * 1000.0;
         self.last_frame = now;
@@ -1529,6 +1538,7 @@ impl App {
             None
         };
         let chrome = Chrome {
+            selection_mode: self.selection_mode,
             model_label: &self.cfg.appearance.model_label,
             directory: &self.session_facts.directory,
             branch: &self.session_facts.branch,
@@ -1630,6 +1640,22 @@ impl App {
             return;
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        if ctrl && key.code == KeyCode::Char('y') {
+            if key.kind == KeyEventKind::Press {
+                self.toggle_selection();
+            }
+            return;
+        }
+        if self.selection_mode {
+            if key.code == KeyCode::Esc {
+                self.toggle_selection();
+            } else if ctrl && key.code == KeyCode::Char('d') {
+                self.quit = true;
+            }
+            // Some terminals translate wheel gestures into arrow keys when
+            // mouse reporting is off. Ignore them rather than advance the book.
+            return;
+        }
         // Any key dismisses the help overlay, but a quit request still counts:
         // being unable to leave because a panel is open would be maddening.
         if self.show_help {
@@ -1757,7 +1783,7 @@ impl App {
     }
 
     pub fn on_mouse(&mut self, mouse: MouseEvent) {
-        if self.show_help || self.voice_workspace.is_some() {
+        if self.selection_mode || self.show_help || self.voice_workspace.is_some() {
             return;
         }
         match mouse.kind {
@@ -1809,7 +1835,26 @@ impl App {
     }
 
     pub fn on_paste(&mut self, text: String) {
-        self.prompt.insert_str(&text);
+        if !self.selection_mode {
+            self.prompt.insert_str(&text);
+        }
+    }
+
+    fn toggle_selection(&mut self) {
+        if self.selection_mode {
+            self.selection_mode = false;
+            if std::mem::take(&mut self.selection_resume) {
+                self.resume_turn();
+            }
+            self.last_frame = Instant::now();
+        } else {
+            self.selection_resume = self.turn.busy() && !self.turn.paused();
+            if self.selection_resume {
+                self.pause();
+            }
+            self.show_help = false;
+            self.selection_mode = true;
+        }
     }
 
     fn on_ctrl_c(&mut self) {

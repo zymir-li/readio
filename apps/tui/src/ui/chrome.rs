@@ -13,6 +13,7 @@ use crate::wrap::{display_width, truncate};
 
 /// Everything the chrome needs to know about the session.
 pub struct Chrome<'a> {
+    pub selection_mode: bool,
     pub model_label: &'a str,
     pub directory: &'a str,
     pub branch: &'a str,
@@ -105,7 +106,7 @@ pub fn render_header(area: Rect, buf: &mut Buffer, c: &Chrome<'_>) {
 /// key hints, which read as a label on the prompt rather than as a state the turn
 /// was in.
 pub fn activity_height(c: &Chrome<'_>) -> u16 {
-    u16::from(c.paused)
+    u16::from(c.paused && !c.selection_mode)
 }
 
 /// Draw that strip: what happened, and the key that undoes it.
@@ -114,7 +115,7 @@ pub fn activity_height(c: &Chrome<'_>) -> u16 {
 /// state is that none is: the turn is stopped and waiting for the reader. The
 /// way back is printed along the status line with every other key hint.
 pub fn render_activity(area: Rect, buf: &mut Buffer, c: &Chrome<'_>) {
-    if area.height == 0 || !c.paused {
+    if area.height == 0 || !c.paused || c.selection_mode {
         return;
     }
     let th = theme();
@@ -184,7 +185,9 @@ pub fn render_status(area: Rect, buf: &mut Buffer, c: &Chrome<'_>) {
     if area.height < 2 {
         return;
     }
-    let mut second = if let Some(notice) = c.notice {
+    let mut second = if c.selection_mode {
+        vec![Span::styled(t("selection.active").to_string(), muted)]
+    } else if let Some(notice) = c.notice {
         vec![Span::styled(format!(" ● {notice}"), muted)]
     } else if c.paused {
         vec![Span::styled(t("chrome.paused_keys").to_string(), muted)]
@@ -226,12 +229,14 @@ pub fn render_status(area: Rect, buf: &mut Buffer, c: &Chrome<'_>) {
         buf,
         second,
         vec![Span::styled(
-            if c.mode == crate::mode::Mode::Speak {
+            if c.selection_mode {
+                " Esc / Ctrl+Y · return "
+            } else if c.mode == crate::mode::Mode::Speak {
                 " ← / → · space pause "
             } else if c.paused {
                 " Enter / space · resume "
             } else {
-                " ↵ continue · /help "
+                " ↵ continue · ^Y select "
             },
             Style::default().fg(th.text_faint),
         )],
@@ -242,6 +247,7 @@ pub fn render_status(area: Rect, buf: &mut Buffer, c: &Chrome<'_>) {
 /// the same in every language.
 #[rustfmt::skip]
 const HELP: &[(&str, &str, &str)] = &[
+    ("Ctrl+Y", "选择模式：拖选后 ⌘C 复制；Esc 或 Ctrl+Y 返回", "select mode: drag and Cmd+C / Ctrl+Shift+C; Esc or Ctrl+Y returns"),
     ("⏎", "载入下一段；命令以 / 开头", "load the next passage; commands start with /"),
     ("⏎ (输出中 / mid-turn)", "加速当前这一轮，直接读到底", "rush the current turn to its end"),
     ("esc", "中断这一轮，位置留在原处；回车接着读", "interrupt the turn, keeping your place; ⏎ carries on"),

@@ -872,3 +872,79 @@ fn the_word_highlight_survives_a_line_wrap() {
         );
     }
 }
+
+#[test]
+fn selection_mode_freezes_the_book_and_ignores_gesture_keys() {
+    let _guard = exclusive();
+    let (mut app, mut terminal) = fixture();
+    screen(&mut app, &mut terminal, 2);
+    press_enter(&mut app);
+    run_until_idle(&mut app, &mut terminal);
+    let before = app.pos;
+    let tick = app.tick;
+    app.on_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('y'),
+        crossterm::event::KeyModifiers::CONTROL,
+    ));
+    assert!(app.selection_mode);
+    for key in [
+        crossterm::event::KeyCode::Down,
+        crossterm::event::KeyCode::PageDown,
+        crossterm::event::KeyCode::Enter,
+        crossterm::event::KeyCode::Char('x'),
+    ] {
+        press(&mut app, key);
+    }
+    app.on_paste("do not insert".into());
+    for _ in 0..3 {
+        app.on_tick();
+    }
+    assert_eq!(app.pos, before, "selection must not advance the book");
+    assert_eq!(
+        app.tick, tick,
+        "selection must freeze frame-driven activity"
+    );
+    assert!(
+        app.prompt.is_empty(),
+        "selection keys/paste must not edit the prompt"
+    );
+    let view = screen(&mut app, &mut terminal, 1);
+    assert!(view.contains("选择模式"), "selection hint missing: {view}");
+    press(&mut app, crossterm::event::KeyCode::Esc);
+    assert!(!app.selection_mode);
+    press_enter(&mut app);
+    run_until_idle(&mut app, &mut terminal);
+    assert_ne!(app.pos, before, "keyboard reading should resume");
+}
+
+#[test]
+fn selection_restores_only_a_turn_it_paused_itself() {
+    let _guard = exclusive();
+    let (mut app, mut terminal) = streaming_fixture();
+    press_enter(&mut app);
+    screen(&mut app, &mut terminal, 1);
+    assert!(app.turn.busy());
+    let select = crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('y'),
+        crossterm::event::KeyModifiers::CONTROL,
+    );
+    app.on_key(select);
+    assert!(app.turn.paused());
+    let mut repeat = select;
+    repeat.kind = crossterm::event::KeyEventKind::Repeat;
+    app.on_key(repeat);
+    assert!(
+        app.selection_mode,
+        "holding the shortcut must not toggle repeatedly"
+    );
+    app.on_key(select);
+    assert!(!app.turn.paused(), "a running turn resumes after selection");
+    press(&mut app, crossterm::event::KeyCode::Esc);
+    assert!(app.turn.paused());
+    app.on_key(select);
+    press(&mut app, crossterm::event::KeyCode::Esc);
+    assert!(
+        app.turn.paused(),
+        "an already paused turn must remain paused"
+    );
+}

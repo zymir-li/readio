@@ -94,14 +94,20 @@ async fn run(mut app: App) -> Result<()> {
         }
         tokio::select! {
             _ = ticker.tick() => {
-                app.on_tick();
-                if let Err(err) = terminal.draw(|frame| app.draw(frame)) {
-                    break Err(err.into());
+                // Native selections must survive: even a changing session
+                // clock can clear the terminal's highlighted text.
+                if !app.selection_mode {
+                    app.on_tick();
+                    if let Err(err) = terminal.draw(|frame| app.draw(frame)) {
+                        break Err(err.into());
+                    }
                 }
             }
             maybe_event = events.next() => {
                 match maybe_event {
                     Some(Ok(event)) => {
+                        let was_selecting = app.selection_mode;
+                        let resized = matches!(&event, Event::Resize(_, _));
                         app.trace_input(&event);
                         match event {
                             Event::Key(key) => app.on_key(key),
@@ -110,8 +116,22 @@ async fn run(mut app: App) -> Result<()> {
                             Event::Resize(_, _) => {}
                             _ => {}
                         }
-                        // Redraw immediately so typing never feels laggy.
-                        if let Err(err) = terminal.draw(|frame| app.draw(frame)) {
+                        let selection_changed = was_selecting != app.selection_mode;
+                        if selection_changed {
+                            let capture = if app.selection_mode {
+                                execute!(terminal.backend_mut(), DisableMouseCapture)
+                            } else {
+                                execute!(terminal.backend_mut(), EnableMouseCapture)
+                            };
+                            if let Err(err) = capture {
+                                break Err(err.into());
+                            }
+                        }
+                        // Draw the selection hint once, then leave the screen
+                        // untouched until selection ends or the window resizes.
+                        if (!app.selection_mode || selection_changed || resized)
+                            && let Err(err) = terminal.draw(|frame| app.draw(frame))
+                        {
                             break Err(err.into());
                         }
                     }

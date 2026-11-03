@@ -226,6 +226,8 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("chrome.help_close", " 按任意键关闭", " any key closes"),
 
     // ── prompt placeholders ──
+    ("selection.active", " 选择模式 · 拖动选中 · ⌘C 复制",
+        " Select · drag to select · Cmd+C / Ctrl+Shift+C"),
     ("prompt.reading", "输入命令，或按回车继续",
         "Enter to continue  ·  / for commands"),
     ("prompt.pick", "输入序号选书，或 /import <路径> 导入",
