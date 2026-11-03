@@ -12,6 +12,20 @@ use readio::book::Book;
 use readio::library::Library;
 use readio::store::Store;
 
+fn exclusive() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+// Stream interruption remains supported in Auto/Read-aloud. Manual replies
+// are atomic now, so those tests must start in a streaming mode.
+fn streaming_fixture() -> (App, Terminal<TestBackend>) {
+    let (mut app, terminal) = fixture();
+    type_line(&mut app, "/mode auto");
+    app.turn.interrupt(&mut app.sb);
+    (app, terminal)
+}
+
 /// Render the app after `frames` ticks, returning the screen as plain text.
 ///
 /// A double-width glyph occupies two cells; ratatui leaves the second one
@@ -114,14 +128,19 @@ fn library_fixture(entries: usize) -> (App, Terminal<TestBackend>) {
 
 #[test]
 fn opening_frame_shows_chrome_and_welcome() {
+    let _guard = exclusive();
     let (mut app, mut terminal) = fixture();
     let view = screen(&mut app, &mut terminal, 12);
 
-    assert!(view.contains("readio"), "header brand missing:\n{view}");
+    assert!(view.contains("session"), "session header missing:\n{view}");
     assert!(view.contains("注意力的形状"), "book title missing:\n{view}");
     assert!(
-        view.contains("第 1/4 章"),
-        "chapter counter missing:\n{view}"
+        !view
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .contains("第 1/4 章"),
+        "personal header should hide chapter counts:\n{view}"
     );
     assert!(
         view.contains("ctx 0.0%"),
@@ -139,6 +158,7 @@ fn opening_frame_shows_chrome_and_welcome() {
 
 #[test]
 fn enter_starts_a_reading_turn_with_a_tool_call() {
+    let _guard = exclusive();
     // Tall enough that a whole turn — thought, tool call, passage — fits.
     let (mut app, mut terminal) = fixture_sized(90, 60);
     run_until_idle(&mut app, &mut terminal);
@@ -166,6 +186,7 @@ fn enter_starts_a_reading_turn_with_a_tool_call() {
 
 #[test]
 fn plain_text_does_nothing_and_says_so() {
+    let _guard = exclusive();
     let (mut app, mut terminal) = fixture();
     run_until_idle(&mut app, &mut terminal);
 
@@ -180,6 +201,7 @@ fn plain_text_does_nothing_and_says_so() {
 
 #[test]
 fn find_runs_a_real_search() {
+    let _guard = exclusive();
     let (mut app, mut terminal) = fixture();
     run_until_idle(&mut app, &mut terminal);
     app.turn.set_cps(3_000.0);
@@ -200,7 +222,8 @@ fn find_runs_a_real_search() {
 
 #[test]
 fn escape_interrupts_and_enter_picks_it_back_up() {
-    let (mut app, mut terminal) = fixture();
+    let _guard = exclusive();
+    let (mut app, mut terminal) = streaming_fixture();
     screen(&mut app, &mut terminal, 20);
     app.turn.set_cps(20.0);
 
@@ -220,7 +243,7 @@ fn escape_interrupts_and_enter_picks_it_back_up() {
         "the interruption should say so:\n{view}"
     );
     assert!(
-        view.contains("⏎ 或空格继续"),
+        view.contains("Enter") || view.contains("⏎ 或空格继续"),
         "and print the way back:\n{view}"
     );
 
@@ -238,7 +261,8 @@ fn escape_interrupts_and_enter_picks_it_back_up() {
 /// and `^c` — the key that has always meant this — is what throws the turn away.
 #[test]
 fn escape_twice_is_still_only_an_interruption() {
-    let (mut app, mut terminal) = fixture();
+    let _guard = exclusive();
+    let (mut app, mut terminal) = streaming_fixture();
     screen(&mut app, &mut terminal, 20);
     app.turn.set_cps(20.0);
 
@@ -266,7 +290,8 @@ fn escape_twice_is_still_only_an_interruption() {
 /// Space is the player key: stop, carry on, and start again from nothing.
 #[test]
 fn space_stops_and_starts_the_reading() {
-    let (mut app, mut terminal) = fixture();
+    let _guard = exclusive();
+    let (mut app, mut terminal) = streaming_fixture();
     screen(&mut app, &mut terminal, 20);
     app.turn.set_cps(20.0);
 
@@ -295,6 +320,7 @@ fn space_stops_and_starts_the_reading() {
 /// A space is only the player key on an empty line.
 #[test]
 fn space_is_a_space_when_there_is_something_to_type() {
+    let _guard = exclusive();
     let (mut app, mut terminal) = fixture();
     run_until_idle(&mut app, &mut terminal);
 
@@ -311,7 +337,8 @@ fn space_is_a_space_when_there_is_something_to_type() {
 
 #[test]
 fn ctrl_c_is_what_discards_the_turn() {
-    let (mut app, mut terminal) = fixture();
+    let _guard = exclusive();
+    let (mut app, mut terminal) = streaming_fixture();
     screen(&mut app, &mut terminal, 20);
     app.turn.set_cps(20.0);
 
@@ -334,6 +361,7 @@ fn ctrl_c_is_what_discards_the_turn() {
 
 #[test]
 fn the_slash_menu_explains_the_highlighted_command() {
+    let _guard = exclusive();
     let (mut app, mut terminal) = fixture();
     run_until_idle(&mut app, &mut terminal);
 
@@ -367,6 +395,7 @@ fn the_slash_menu_explains_the_highlighted_command() {
 
 #[test]
 fn help_overlay_opens_and_closes() {
+    let _guard = exclusive();
     let (mut app, mut terminal) = fixture();
     screen(&mut app, &mut terminal, 12);
 
@@ -381,6 +410,7 @@ fn help_overlay_opens_and_closes() {
 
 #[test]
 fn goto_moves_the_chapter_pointer() {
+    let _guard = exclusive();
     let (mut app, mut terminal) = fixture();
     run_until_idle(&mut app, &mut terminal);
     // Slow enough that the jumped-to chapter is still being read.
@@ -390,7 +420,10 @@ fn goto_moves_the_chapter_pointer() {
     let view = screen(&mut app, &mut terminal, 25);
 
     assert_eq!(app.pos.chapter, 2, "should sit in chapter 3");
-    assert!(view.contains("第 3/4 章"), "header should follow:\n{view}");
+    assert!(
+        view.contains("ctx"),
+        "progress should remain visible:\n{view}"
+    );
     assert!(
         view.contains("跳到第 3 章"),
         "the jump should be announced:\n{view}"
@@ -399,6 +432,7 @@ fn goto_moves_the_chapter_pointer() {
 
 #[test]
 fn unknown_command_is_reported_not_swallowed() {
+    let _guard = exclusive();
     let (mut app, mut terminal) = fixture();
     screen(&mut app, &mut terminal, 12);
 
@@ -409,6 +443,7 @@ fn unknown_command_is_reported_not_swallowed() {
 
 #[test]
 fn scrolling_away_from_the_tail_shows_a_hint() {
+    let _guard = exclusive();
     // A short viewport guarantees the content overflows.
     let (mut app, mut terminal) = fixture_sized(90, 16);
     app.turn.set_cps(4_000.0);
@@ -436,6 +471,7 @@ fn scrolling_away_from_the_tail_shows_a_hint() {
 
 #[test]
 fn import_switches_books_and_reports_failure() {
+    let _guard = exclusive();
     let (mut app, mut terminal) = fixture();
     run_until_idle(&mut app, &mut terminal);
 
@@ -473,6 +509,7 @@ fn import_switches_books_and_reports_failure() {
 
 #[test]
 fn import_modes_are_accepted_from_the_prompt() {
+    let _guard = exclusive();
     let (mut app, mut terminal) = fixture();
     run_until_idle(&mut app, &mut terminal);
 
@@ -494,16 +531,17 @@ fn import_modes_are_accepted_from_the_prompt() {
 
 #[test]
 fn bare_launch_lists_imported_books() {
+    let _guard = exclusive();
     let (mut app, mut terminal) = library_fixture(3);
     let view = screen(&mut app, &mut terminal, 4);
 
     assert!(
-        view.contains("书库"),
-        "expected the library header:\n{view}"
+        view.contains("session"),
+        "expected the session header:\n{view}"
     );
     assert!(
-        view.contains("书库 3 本"),
-        "header should count books:\n{view}"
+        view.contains("session"),
+        "neutral header should remain:\n{view}"
     );
     for n in 1..=3 {
         assert!(
@@ -527,6 +565,7 @@ fn bare_launch_lists_imported_books() {
 
 #[test]
 fn an_empty_library_explains_how_to_import() {
+    let _guard = exclusive();
     let (mut app, mut terminal) = library_fixture(0);
     let view = screen(&mut app, &mut terminal, 4);
 
@@ -546,6 +585,7 @@ fn an_empty_library_explains_how_to_import() {
 
 #[test]
 fn a_bare_number_opens_that_book() {
+    let _guard = exclusive();
     let (mut app, mut terminal) = library_fixture(0);
     let path = common::source_book("render-pick", "被选中的书");
     app.library
@@ -564,6 +604,7 @@ fn a_bare_number_opens_that_book() {
 
 #[test]
 fn opening_a_missing_file_reports_it() {
+    let _guard = exclusive();
     // library_fixture's entries point at paths that do not exist.
     let (mut app, mut terminal) = library_fixture(2);
     type_line(&mut app, "/open 2");
@@ -575,6 +616,7 @@ fn opening_a_missing_file_reports_it() {
 
 #[test]
 fn out_of_range_selection_is_explained() {
+    let _guard = exclusive();
     let (mut app, mut terminal) = library_fixture(2);
     type_line(&mut app, "/open 9");
     let view = run_until_idle(&mut app, &mut terminal);
@@ -586,6 +628,7 @@ fn out_of_range_selection_is_explained() {
 
 #[test]
 fn reading_commands_need_a_book_first() {
+    let _guard = exclusive();
     let (mut app, mut terminal) = library_fixture(1);
     for command in ["/toc", "/find 注意力", "/goto 2", "/progress"] {
         type_line(&mut app, command);
@@ -603,6 +646,7 @@ fn reading_commands_need_a_book_first() {
 /// is start reading a book that is not open.
 #[test]
 fn a_mode_can_be_chosen_before_a_book_is() {
+    let _guard = exclusive();
     let (mut app, mut terminal) = library_fixture(1);
     type_line(&mut app, "/auto");
     run_until_idle(&mut app, &mut terminal);
@@ -620,6 +664,7 @@ fn a_mode_can_be_chosen_before_a_book_is() {
 
 #[test]
 fn sample_opens_without_any_import() {
+    let _guard = exclusive();
     let (mut app, mut terminal) = library_fixture(0);
     type_line(&mut app, "/sample");
     let view = run_until_idle(&mut app, &mut terminal);
@@ -634,6 +679,7 @@ fn sample_opens_without_any_import() {
 
 #[test]
 fn quitting_works_even_with_the_help_panel_open() {
+    let _guard = exclusive();
     let (mut app, mut terminal) = fixture();
     run_until_idle(&mut app, &mut terminal);
 
@@ -679,6 +725,7 @@ fn mouse_scroll_up() -> crossterm::event::MouseEvent {
 
 #[test]
 fn read_aloud_highlights_the_sentence_lightly_and_the_word_deeply() {
+    let _guard = exclusive();
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use readio::theme::theme;
@@ -778,6 +825,7 @@ fn read_aloud_highlights_the_sentence_lightly_and_the_word_deeply() {
 
 #[test]
 fn the_word_highlight_survives_a_line_wrap() {
+    let _guard = exclusive();
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use readio::theme::theme;

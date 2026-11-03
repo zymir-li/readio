@@ -9,7 +9,9 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
+use crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
@@ -64,6 +66,8 @@ pub struct App {
     pub tick: u64,
     pub quit: bool,
     show_help: bool,
+    session_facts: crate::session::Facts,
+    preview_job: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
     notice: Option<(String, Instant)>,
     /// The next reading turn should explain that it restored progress.
     resumed: bool,
@@ -298,6 +302,8 @@ impl App {
             tick: 0,
             quit: false,
             show_help: false,
+            session_facts: crate::session::Facts::current(),
+            preview_job: None,
             notice: None,
             resumed: false,
             mode,
@@ -369,8 +375,9 @@ impl App {
     // ── book lifecycle ───────────────────────────────────────────────────────
 
     /// Make `book` the open one, restoring its saved position.
-    fn adopt(&mut self, book: Book) {
+    fn adopt(&mut self, mut book: Book) {
         self.save_progress();
+        crate::dialogue::prepare(&mut book);
         let saved = self.store.get(&book.id).cloned();
         let pos = saved
             .as_ref()
@@ -492,12 +499,14 @@ impl App {
         // Resolve an output-device change before the turn gets even one frame
         // to advance. A blocked read-aloud turn must stop; pumping first would
         // reveal tokens at the text clock and become a one-frame Auto fallback.
+        self.poll_image_preview();
         self.poll_audio_device();
 
         // Whether the next passage is going to be spoken, refreshed every frame
         // so it can never be stale: a passage held for a voice that is not
         // coming would simply never appear.
         self.turn.set_voiced(self.speech && self.audio_permitted());
+        self.turn.set_instant(self.mode() == ReadMode::Manual);
         let effects = self.turn.pump(&mut self.sb, dt.min(200.0));
         if let Some((id, text)) = self.turn.take_spoken() {
             self.mark_match(id, &text);
@@ -1222,7 +1231,8 @@ impl App {
             return;
         };
         let pos = Pos { chapter, para };
-        let (steps, _) = flow::continue_reading(book, pos, false);
+        let (steps, _) =
+            flow::continue_reading_mode(book, pos, false, self.mode() == ReadMode::Manual);
         let opening = steps.iter().find_map(|step| match step {
             Step::Say { text, .. } => sentence::split(text).into_iter().next(),
             _ => None,
@@ -1519,6 +1529,9 @@ impl App {
             None
         };
         let chrome = Chrome {
+            model_label: &self.cfg.appearance.model_label,
+            directory: &self.session_facts.directory,
+            branch: &self.session_facts.branch,
             book: self
                 .book
                 .as_ref()
@@ -1591,7 +1604,7 @@ impl App {
             Constraint::Length(activity_h),
             Constraint::Length(menu_h),
             Constraint::Length(prompt_h),
-            Constraint::Length(1),
+            Constraint::Length(2),
         ])
         .areas(area);
 
@@ -1744,10 +1757,54 @@ impl App {
     }
 
     pub fn on_mouse(&mut self, mouse: MouseEvent) {
+        if self.show_help || self.voice_workspace.is_some() {
+            return;
+        }
         match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(path) = self.sb.image_at(mouse.column, mouse.row) {
+                    self.open_image_preview(path);
+                }
+            }
             MouseEventKind::ScrollUp => self.sb.scroll_lines(-3),
-            MouseEventKind::ScrollDown => self.scroll_down(3),
+            // Wheel/trackpad gestures only inspect loaded content. Reaching
+            // the tail must never advance the book or save a new position.
+            MouseEventKind::ScrollDown => self.sb.scroll_lines(3),
             _ => {}
+        }
+    }
+
+    fn open_image_preview(&mut self, path: std::path::PathBuf) {
+        if self.preview_job.is_some() {
+            self.notice("正在准备图片预览…");
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = crate::preview::open(&path).map_err(|e| format!("{e:#}"));
+            let _ = tx.send(result);
+        });
+        self.preview_job = Some(rx);
+        self.notice("正在用预览打开图片…");
+    }
+
+    fn poll_image_preview(&mut self) {
+        let result = self
+            .preview_job
+            .as_ref()
+            .and_then(|rx| match rx.try_recv() {
+                Ok(result) => Some(result),
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    Some(Err("图片预览任务已结束，请重试".into()))
+                }
+            });
+        if let Some(result) = result {
+            self.preview_job = None;
+            match result {
+                Ok(()) => self.notice("图片已在预览中打开"),
+                Err(message) => self.notice(&message),
+            }
         }
     }
 
@@ -2302,7 +2359,17 @@ impl App {
             self.sb.push(Block::Event(Event::BookComplete));
             return;
         }
-        let (steps, _next) = flow::continue_reading(book, self.pos, self.resumed);
+        let manual = self.mode() == ReadMode::Manual;
+        let (steps, _next) = flow::continue_reading_window(
+            book,
+            self.pos,
+            self.resumed,
+            manual,
+            self.sb.reading_window(),
+        );
+        if manual {
+            self.sb.begin_reading();
+        }
         self.resumed = false;
         // Whatever was rendered ahead belonged to this turn; the next boundary
         // gets its own look at what is coming.

@@ -194,9 +194,12 @@ fn transparency_composites_over_the_theme_background() {
     let Color::Rgb(r, _, _) = buf[(0, 0)].fg else {
         panic!("expected a truecolor cell, got {:?}", buf[(0, 0)].fg);
     };
+    let Color::Rgb(background, _, _) = theme_bg() else {
+        panic!("RGB theme")
+    };
     assert!(
-        (100..=200).contains(&r),
-        "50% white over a dark background should land mid-range, got {r}"
+        r > background && r < 255,
+        "half-transparent white must fall between the theme and opaque white: {r}"
     );
 }
 

@@ -2,7 +2,7 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style, Stylize};
+use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block as UiBlock, BorderType, Borders, Clear, Paragraph, Widget};
 
@@ -13,6 +13,9 @@ use crate::wrap::{display_width, truncate};
 
 /// Everything the chrome needs to know about the session.
 pub struct Chrome<'a> {
+    pub model_label: &'a str,
+    pub directory: &'a str,
+    pub branch: &'a str,
     pub book: &'a str,
     pub author: Option<&'a str>,
     pub chapter_title: &'a str,
@@ -76,53 +79,20 @@ fn split_row(area: Rect, buf: &mut Buffer, left: Vec<Span<'static>>, right: Vec<
 
 pub fn render_header(area: Rect, buf: &mut Buffer, c: &Chrome<'_>) {
     let th = theme();
-    let mut left = vec![
-        Span::styled(
-            " readio ".to_string(),
-            Style::default()
-                .fg(th.bg_base)
-                .bg(th.accent_agent)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw("  "),
-        Span::styled(
-            c.book.to_string(),
-            Style::default().fg(th.text_primary).bold(),
-        ),
-    ];
-    if let Some(author) = c.author {
-        left.push(Span::styled(
-            format!("  {author}"),
-            Style::default().fg(th.text_faint),
-        ));
-    }
-
-    // Before a book is open the right side reports the library instead.
+    let left = vec![Span::styled(
+        " ● session",
+        Style::default().fg(th.text_secondary),
+    )];
     let right = if c.has_book {
-        // Reading progress reads as context pressure: the book is the window.
-        vec![
-            Span::styled(
-                tf(
-                    "chrome.chapter",
-                    &[&(c.chapter_index + 1), &c.chapter_total.max(1)],
-                ),
-                Style::default().fg(th.text_secondary),
-            ),
-            Span::styled("  ·  ".to_string(), Style::default().fg(th.text_faint)),
-            Span::styled(
-                format!("ctx {:.1}%", metrics::context_percent(c.progress)),
-                Style::default().fg(th.accent_model),
-            ),
-            Span::raw(" "),
-        ]
+        vec![Span::styled(
+            format!("ctx {:.1}% ", metrics::context_percent(c.progress)),
+            Style::default().fg(th.accent_model),
+        )]
     } else {
-        vec![
-            Span::styled(
-                tf("chrome.library_count", &[&c.library_count]),
-                Style::default().fg(th.accent_model),
-            ),
-            Span::raw(" "),
-        ]
+        vec![Span::styled(
+            tf("chrome.library_count", &[&c.library_count]),
+            Style::default().fg(th.text_secondary),
+        )]
     };
     split_row(area, buf, left, right);
 }
@@ -181,128 +151,91 @@ fn speech_span(c: &Chrome<'_>) -> Vec<Span<'static>> {
 }
 
 pub fn render_status(area: Rect, buf: &mut Buffer, c: &Chrome<'_>) {
+    if area.height == 0 {
+        return;
+    }
     let th = theme();
-    let faint = Style::default().fg(th.text_faint);
-
-    // An interruption outranks a notice. A notice fades on its own; an
-    // interruption is a state the reader has to be told how to leave, and telling
-    // them two seconds late is how "esc did nothing" gets reported as a bug.
-    let left = if c.paused {
-        // What happened is drawn above the prompt by `render_activity`; down here
-        // only the way out of it belongs.
-        vec![
-            Span::raw("  "),
-            Span::styled(t("chrome.paused_keys").to_string(), faint),
-        ]
-    } else if let Some(notice) = c.notice {
-        vec![
-            Span::styled(
-                format!("  {} ", theme::BULLET_DONE),
-                Style::default().fg(th.accent_system),
-            ),
-            Span::styled(notice.to_string(), Style::default().fg(th.text_secondary)),
-        ]
-    } else if c.busy {
-        let mut spans = vec![
-            Span::raw("  "),
-            Span::styled(
-                format!("{} ", theme::spinner_frame(c.tick)),
-                Style::default().fg(th.accent_running),
-            ),
-            Span::styled(
-                // The chip and the readout own the right of this row, so the
-                // title yields before the hints do.
-                truncate(c.chapter_title, 22),
-                Style::default().fg(th.text_secondary),
-            ),
-        ];
-        spans.extend(speech_span(c));
-        let tail = if c.mode == crate::mode::Mode::Speak {
-            "chrome.aloud_tail"
-        } else {
-            "chrome.busy_tail"
-        };
-        spans.push(Span::styled(t(tail).to_string(), faint));
-        spans
-    } else if c.scrolled {
-        vec![
-            Span::raw("  "),
-            Span::styled(
-                tf(
-                    "chrome.scrolled",
-                    &[
-                        &theme::ELLIPSIS,
-                        &format!("{:.0}", c.scroll_percent * 100.0),
-                    ],
-                ),
-                Style::default().fg(th.accent_warning),
-            ),
-            Span::styled(t("chrome.scrolled_tail").to_string(), faint),
-        ]
-    } else if !c.has_book {
-        // With nothing imported there is no number to type, and advice you
-        // cannot follow is worse than none.
-        let (hint, tail) = if c.library_count == 0 {
-            ("chrome.empty_hint", "chrome.empty_tail")
-        } else {
-            ("chrome.pick_hint", "chrome.pick_tail")
-        };
-        vec![
-            Span::raw("  "),
-            Span::styled(t(hint).to_string(), Style::default().fg(th.text_secondary)),
-            Span::styled(t(tail).to_string(), faint),
-        ]
+    let muted = Style::default().fg(th.text_secondary);
+    let label = if c.model_label.trim().is_empty() {
+        "local"
     } else {
-        let mut spans = vec![
-            Span::raw("  "),
-            Span::styled(
-                t("chrome.continue").to_string(),
-                Style::default().fg(th.text_secondary),
-            ),
-        ];
-        spans.extend(speech_span(c));
-        spans.push(Span::styled(t("chrome.idle_tail").to_string(), faint));
-        spans
+        c.model_label.trim()
     };
-
-    let mode_chip = crate::mode::chip(c.mode);
-    let mut right = vec![Span::styled(
-        format!("{mode_chip}  "),
-        Style::default().fg(if c.mode.scrolls() {
-            th.accent_success
-        } else {
-            th.text_faint
-        }),
-    )];
-    right.extend([
+    let first = vec![
         Span::styled(
-            format!("{} ", theme::dot_frame(c.tick)),
-            Style::default().fg(if c.busy {
-                th.accent_model
-            } else {
-                th.text_faint
-            }),
+            format!(" [model: {} · {}]", truncate(label, 24), c.effort.code()),
+            Style::default().fg(th.accent_model),
         ),
-        Span::styled("readio-1".to_string(), Style::default().fg(th.accent_model)),
-        // The effort level rides with the model name, the way a coding agent
-        // prints `(high)` after the model it is talking to.
+        Span::styled(format!("  {}", truncate(c.directory, 22)), muted),
         Span::styled(
-            format!(" ({})", c.effort.code()),
-            Style::default().fg(th.text_faint),
+            format!("  git:({})", truncate(c.branch, 28)),
+            Style::default().fg(th.accent_thinking),
         ),
-        // Session readout in agent vocabulary: tokens moved and time on the
-        // clock, not characters and words per minute.
-        Span::styled(
-            format!(
-                "  {} tok  ·  {}",
-                metrics::format_tokens(metrics::tokens_from_chars(c.session_chars)),
-                metrics::format_duration(c.elapsed)
+    ];
+    split_row(
+        Rect::new(area.x, area.y, area.width, 1),
+        buf,
+        first,
+        vec![Span::styled(
+            format!(" {} ", metrics::format_duration(c.elapsed)),
+            muted,
+        )],
+    );
+    if area.height < 2 {
+        return;
+    }
+    let mut second = if let Some(notice) = c.notice {
+        vec![Span::styled(format!(" ● {notice}"), muted)]
+    } else if c.paused {
+        vec![Span::styled(t("chrome.paused_keys").to_string(), muted)]
+    } else if c.scrolled {
+        vec![Span::styled(
+            tf(
+                "chrome.scrolled",
+                &[
+                    &theme::ELLIPSIS,
+                    &format!("{:.0}", c.scroll_percent * 100.0),
+                ],
             ),
-            faint,
-        ),
-        Span::raw(" "),
-    ]);
-    split_row(area, buf, left, right);
+            muted,
+        )]
+    } else {
+        let filled = (c.progress.clamp(0.0, 1.0) * 8.0).round() as usize;
+        vec![
+            Span::styled(
+                format!(
+                    " Usage ~{} tok  ·  ",
+                    metrics::format_tokens(metrics::tokens_from_chars(c.session_chars))
+                ),
+                muted,
+            ),
+            Span::styled(
+                format!(
+                    "ctx [{}{}] {:.1}%",
+                    "━".repeat(filled),
+                    "─".repeat(8 - filled),
+                    metrics::context_percent(c.progress)
+                ),
+                Style::default().fg(th.accent_model),
+            ),
+        ]
+    };
+    second.extend(speech_span(c));
+    split_row(
+        Rect::new(area.x, area.y + 1, area.width, 1),
+        buf,
+        second,
+        vec![Span::styled(
+            if c.mode == crate::mode::Mode::Speak {
+                " ← / → · space pause "
+            } else if c.paused {
+                " Enter / space · resume "
+            } else {
+                " ↵ continue · /help "
+            },
+            Style::default().fg(th.text_faint),
+        )],
+    );
 }
 
 /// Help rows: label, Chinese, English. Labels are keys and commands, which are

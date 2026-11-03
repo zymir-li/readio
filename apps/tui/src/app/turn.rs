@@ -94,6 +94,8 @@ enum Active {
 }
 
 pub struct Turn {
+    /// Manual reading releases each complete paragraph within one frame.
+    instant: bool,
     steps: VecDeque<Step>,
     active: Option<Active>,
     /// Pacer for book content.
@@ -132,6 +134,7 @@ pub struct Turn {
 impl Turn {
     pub fn new(cps: f32) -> Self {
         Self {
+            instant: false,
             steps: VecDeque::new(),
             active: None,
             reading: Pacer::new(cps),
@@ -191,6 +194,10 @@ impl Turn {
         if let Some(Active::Tool { until, .. }) = self.active.as_mut() {
             *until = Instant::now();
         }
+    }
+
+    pub fn set_instant(&mut self, instant: bool) {
+        self.instant = instant;
     }
 
     pub fn set_cps(&mut self, cps: f32) {
@@ -424,6 +431,11 @@ impl Turn {
             match step {
                 Step::Think(text) => {
                     let id = sb.push_running(Block::thinking());
+                    if self.instant && !self.voiced {
+                        sb.push_chunk(id, &text);
+                        sb.finish(id, Some(0));
+                        continue;
+                    }
                     self.active = Some(Active::Stream {
                         id,
                         kind: StreamKind::Thinking,
@@ -439,6 +451,14 @@ impl Turn {
                 Step::Say { text, emphasis } => {
                     let id = sb.push_running(Block::passage(emphasis));
                     self.spoken = Some((id, text.clone()));
+                    if self.instant && !self.voiced {
+                        let counted = text.chars().filter(|c| *c != '\n').count();
+                        self.turn_chars += counted;
+                        self.session_chars += counted;
+                        sb.push_chunk(id, &text);
+                        sb.finish(id, Some(0));
+                        continue;
+                    }
                     // A passage about to be read aloud starts held shut: the
                     // first characters belong to the first clip, and that clip
                     // does not exist yet.
@@ -455,6 +475,10 @@ impl Turn {
                 }
                 Step::Tool { tool, ms } => {
                     let id = sb.push_running(Block::Tool(tool));
+                    if self.instant && !self.voiced {
+                        sb.finish(id, Some(0));
+                        continue;
+                    }
                     let now = Instant::now();
                     self.active = Some(Active::Tool {
                         id,
@@ -540,6 +564,35 @@ fn drain_chars(queue: &mut VecDeque<Chunk>, mut wanted: usize) -> String {
 mod tests {
     use super::*;
     use crate::ui::scrollback::Scrollback;
+
+    #[test]
+    fn manual_paragraph_is_complete_in_one_frame() {
+        let mut turn = Turn::new(4.0);
+        turn.set_instant(true);
+        let mut sb = Scrollback::new();
+        let text = "完整的第一段。包含标点，不应逐字输出。";
+        turn.enqueue(vec![
+            Step::Think("Reading".into()),
+            Step::Tool {
+                tool: Tool::new(crate::ui::block::Verb::Read, "book.md"),
+                ms: 500,
+            },
+            passage(text),
+            Step::Advance {
+                chapter: 0,
+                para: 1,
+            },
+        ]);
+        let effects = turn.pump(&mut sb, 0.0);
+        assert!(!turn.busy());
+        assert_eq!(turn.turn_chars, text.chars().count());
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::Advance { para: 1, .. }))
+        );
+        assert!(effects.iter().any(|e| matches!(e, Effect::Finished)));
+    }
 
     fn passage(text: &str) -> Step {
         Step::Say {

@@ -429,7 +429,8 @@ fn entering_read_aloud_mid_sentence_waits_for_audio_to_catch_up() {
     until(&mut app, &mut terminal, "the opening turn", |app| {
         !app.turn.busy()
     });
-    app.on_key(KeyEvent::from(KeyCode::Enter));
+    // Only Auto streams now; Manual reveals a complete reply atomically.
+    type_line(&mut app, "/mode auto");
 
     until(
         &mut app,

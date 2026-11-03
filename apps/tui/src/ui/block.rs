@@ -283,28 +283,9 @@ impl Block {
     /// cells and how many of this block's lines come before it.
     ///
     /// `None` when the file is unreadable — the placeholder is drawn as text.
-    pub fn image_plan(&self, width: u16) -> Option<ImagePlan> {
-        let Block::Image {
-            path,
-            dims,
-            max_rows,
-            ..
-        } = self
-        else {
-            return None;
-        };
-        let (w, h) = (*dims)?;
-        let body = width.saturating_sub(2).max(1);
-        let fit = crate::ui::image::fit_in(w, h, body, *max_rows);
-        if fit.is_empty() {
-            return None;
-        }
-        Some(ImagePlan {
-            path: path.clone(),
-            cols: fit.cols,
-            rows: fit.rows,
-            skip_lines: IMAGE_HEADER_LINES,
-        })
+    pub fn image_plan(&self, _width: u16) -> Option<ImagePlan> {
+        // Book illustrations are opened externally from a compact button.
+        None
     }
 
     /// A passage that is already complete, used by `/voice test`.
@@ -616,7 +597,7 @@ fn render_passage(
     ctx: &Ctx,
 ) -> Vec<Line<'static>> {
     let th = theme();
-    let width = ctx.body_width();
+    let width = ctx.body_width().min(96);
     let mut out = vec![Line::from("")];
     let mut in_code = false;
     // Byte offset of the current source line inside `text`.
@@ -652,14 +633,7 @@ fn render_passage(
         // Marker width matters twice: it is not drawn, and the highlight offsets
         // have to stay aligned with the source text.
         let (marker, body_width, style, quote) = if trimmed.starts_with("## ") {
-            (
-                3,
-                width,
-                Style::default()
-                    .fg(th.accent_agent)
-                    .add_modifier(Modifier::BOLD),
-                false,
-            )
+            (3, width, Style::default().fg(th.text_secondary), false)
         } else if trimmed.starts_with("> ") {
             (
                 2,
@@ -689,6 +663,8 @@ fn render_passage(
                     format!("{} ", theme::QUOTE_BAR),
                     Style::default().fg(th.accent_plan),
                 )
+            } else if out.len() == 1 {
+                gutter(theme::BULLET_DONE, th.text_secondary)
             } else {
                 indent()
             };
@@ -904,12 +880,10 @@ fn render_event(event: &Event, _ctx: &Ctx) -> Vec<Line<'static>> {
         Event::TurnComplete { ms, chars } => (
             theme::CHECK,
             th.text_faint,
-            tf(
-                "block.turn_done",
-                &[
-                    &metrics::format_tokens(metrics::tokens_from_chars(*chars)),
-                    &format!("{:.1}", *ms as f64 / 1000.0),
-                ],
+            format!(
+                "~{} tok  ·  {:.1}s",
+                metrics::format_tokens(metrics::tokens_from_chars(*chars)),
+                *ms as f64 / 1000.0
             ),
         ),
         Event::Interrupted => (
@@ -1031,55 +1005,42 @@ fn render_plan(title: &str, items: &[PlanItem], hidden: usize, ctx: &Ctx) -> Vec
 /// Caption plus blank rows for the picture. The pixels land on the blank rows
 /// in a second pass; a file we cannot read gets a framed placeholder instead,
 /// which is also just text.
+pub const IMAGE_PREVIEW_BUTTON: &str = "[用预览打开]";
+
 fn render_image(
     path: &std::path::Path,
     alt: &str,
-    dims: Option<(u32, u32)>,
-    max_rows: u16,
+    _dims: Option<(u32, u32)>,
+    _max_rows: u16,
     ctx: &Ctx,
 ) -> Vec<Line<'static>> {
     let th = theme();
-    let body = ctx.body_width();
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "image".to_string());
+        .unwrap_or_else(|| "图片".to_string());
     let label = if alt.trim().is_empty() { &name } else { alt };
-
-    let caption = match dims {
-        Some((w, h)) => tf(
-            "block.image",
-            &[&truncate(label, body.saturating_sub(18)), &w, &h],
-        ),
-        None => tf(
-            "block.image_failed",
-            &[&truncate(label, body.saturating_sub(8))],
-        ),
-    };
-
-    let mut out = vec![
+    let remaining = ctx
+        .body_width()
+        .saturating_sub(display_width(IMAGE_PREVIEW_BUTTON) + 2);
+    vec![
         Line::from(""),
         Line::from(vec![
-            gutter(theme::IMAGE, th.accent_tool),
-            Span::styled(caption, Style::default().fg(th.text_secondary)),
+            indent(),
+            Span::styled(
+                IMAGE_PREVIEW_BUTTON,
+                Style::default()
+                    .fg(th.accent_system)
+                    .bg(th.bg_soft)
+                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                truncate(label, remaining),
+                Style::default().fg(th.text_secondary),
+            ),
         ]),
-    ];
-
-    match dims {
-        Some((w, h)) => {
-            let fit = crate::ui::image::fit_in(w, h, body.min(u16::MAX as usize) as u16, max_rows);
-            for _ in 0..fit.rows.max(1) {
-                out.push(Line::from(""));
-            }
-        }
-        // Three rows is enough for a frame with a label in it.
-        None => {
-            for _ in 0..3 {
-                out.push(Line::from(""));
-            }
-        }
-    }
-    out
+    ]
 }
 
 fn render_context(info: &ContextInfo, ctx: &Ctx) -> Vec<Line<'static>> {

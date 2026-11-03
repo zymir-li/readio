@@ -194,57 +194,34 @@ fn an_epub_illustration_becomes_a_paragraph_with_a_real_file() {
 }
 
 #[test]
-fn the_picture_is_actually_painted_on_the_screen() {
+fn an_illustration_has_a_preview_button_instead_of_terminal_pixels() {
     common::isolated_home();
-    let path = epub_with_image("painted");
+    let path = epub_with_image("preview-button");
     let book = Book::load(Some(&path)).expect("load epub");
-
     let mut app = App::new(Library::ephemeral(), Store::ephemeral(), Some(book), None);
     let mut terminal = Terminal::new(TestBackend::new(80, 30)).expect("terminal");
-
-    // Fast enough to get through the passage inside the frame budget below.
-    app.turn.set_cps(4_000.0);
     settle(&mut app, &mut terminal);
+    assert!(!screen_text(&terminal).contains("用预览打开"));
+    for _ in 0..4 {
+        press_enter(&mut app);
+        settle(&mut app, &mut terminal);
+        if screen_text(&terminal).contains("用预览打开") {
+            break;
+        }
+    }
+    let text = screen_text(&terminal);
+    assert!(
+        text.contains("[用预览打开]"),
+        "clickable preview missing:\n{text}"
+    );
+    assert!(
+        text.contains("示意图"),
+        "image caption should remain:\n{text}"
+    );
     assert_eq!(
         pixel_cells(&terminal),
         0,
-        "nothing is drawn before the reading turn reaches the image"
-    );
-
-    // Enter starts reading; the turn contains the illustration.
-    press_enter(&mut app);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    while pixel_cells(&terminal) == 0 && std::time::Instant::now() < deadline {
-        read_until(&mut app, &mut terminal, 1);
-    }
-
-    let painted = pixel_cells(&terminal);
-    assert!(
-        painted > 40,
-        "the illustration should cover a block of cells, got {painted}"
-    );
-
-    // Those cells carry two distinct colours: the picture's red on top, and
-    // whatever is below it. A monochrome result would mean we drew a box.
-    let buffer = terminal.backend().buffer();
-    let coloured = buffer
-        .content()
-        .iter()
-        .filter(|cell| cell.symbol() == "▀")
-        .filter(|cell| {
-            matches!(cell.fg, ratatui::style::Color::Rgb(r, g, b) if r > g && r > b && r > 100)
-        })
-        .count();
-    assert!(
-        coloured > 40,
-        "the pixels should carry the image's red, got {coloured} of {painted}"
-    );
-
-    // The caption is on screen too, above the pixels.
-    let text = screen_text(&terminal);
-    assert!(
-        text.contains("插图") && text.contains("64×32"),
-        "the caption should name the picture and its size:\n{text}"
+        "personal mode uses external previews"
     );
 }
 

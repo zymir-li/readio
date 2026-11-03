@@ -4,7 +4,7 @@ name: tui-ci
 # reader actually changes.
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, codex/personal-tui]
     paths:
       - "apps/tui/**"
       - ".github/workflows/tui-ci.yml"

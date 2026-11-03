@@ -73,6 +73,10 @@ pub struct Scrollback {
     total_lines: usize,
     /// Viewport height of the last laid-out frame.
     viewport: usize,
+    width: u16,
+    anchor_next: bool,
+    pending_anchor: Option<u64>,
+    image_buttons: Vec<(Rect, std::path::PathBuf)>,
     /// Global fold preference for tool blocks.
     pub expand_tools: bool,
     /// Decoded illustrations, keyed by entry and the size they were fitted to.
@@ -96,16 +100,44 @@ impl Scrollback {
             offset: 0,
             total_lines: 0,
             viewport: 0,
+            width: 80,
+            anchor_next: false,
+            pending_anchor: None,
+            image_buttons: Vec::new(),
             expand_tools: false,
             images: HashMap::new(),
         }
     }
 
+    /// Use two thirds of the actual text viewport for each manual reading group.
+    pub fn reading_window(&self) -> (u16, usize) {
+        (
+            self.width.max(8),
+            (self.viewport.saturating_sub(2)).clamp(3, 7),
+        )
+    }
+
+    pub fn image_at(&self, x: u16, y: u16) -> Option<std::path::PathBuf> {
+        self.image_buttons
+            .iter()
+            .find(|(rect, _)| x >= rect.x && x < rect.right() && y >= rect.y && y < rect.bottom())
+            .map(|(_, path)| path.clone())
+    }
+
+    pub fn begin_reading(&mut self) {
+        self.anchor_next = true;
+        self.pending_anchor = None;
+    }
+
     pub fn push(&mut self, block: Block) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
+        if self.anchor_next && matches!(&block, Block::Passage { .. } | Block::Image { .. }) {
+            self.pending_anchor = Some(id);
+            self.anchor_next = false;
+        }
         let mode = match block {
-            Block::Tool(_) if !self.expand_tools => Mode::Truncated,
+            Block::Tool(_) if !self.expand_tools => Mode::Collapsed,
             Block::Tool(_) => Mode::Expanded,
             _ => Mode::Truncated,
         };
@@ -233,6 +265,9 @@ impl Scrollback {
 
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.image_buttons.clear();
+        self.anchor_next = false;
+        self.pending_anchor = None;
         self.images.clear();
         self.offset = 0;
         self.total_lines = 0;
@@ -253,7 +288,7 @@ impl Scrollback {
         let mode = if self.expand_tools {
             Mode::Expanded
         } else {
-            Mode::Truncated
+            Mode::Collapsed
         };
         for entry in self.entries.iter_mut() {
             if matches!(entry.block, Block::Tool(_)) {
@@ -290,6 +325,8 @@ impl Scrollback {
     }
 
     pub fn scroll_lines(&mut self, delta: i32) {
+        self.pending_anchor = None;
+        self.anchor_next = false;
         let max = self.max_offset();
         let next = (self.offset as i64 + delta as i64).clamp(0, max as i64) as usize;
         self.offset = next;
@@ -302,11 +339,15 @@ impl Scrollback {
     }
 
     pub fn to_bottom(&mut self) {
+        self.pending_anchor = None;
+        self.anchor_next = false;
         self.offset = self.max_offset();
         self.follow = true;
     }
 
     pub fn to_top(&mut self) {
+        self.pending_anchor = None;
+        self.anchor_next = false;
         self.offset = 0;
         self.follow = false;
     }
@@ -331,17 +372,27 @@ impl Scrollback {
     // ── rendering ────────────────────────────────────────────────────────────
 
     pub fn render(&mut self, area: Rect, buf: &mut Buffer, tick: u64) {
+        self.image_buttons.clear();
         if area.width < 8 || area.height == 0 {
             return;
         }
         self.viewport = area.height as usize;
+        self.width = area.width;
 
         // Pass one: lay out every entry as lines, noting where illustrations
         // reserved space so their pixels can be painted over it afterwards.
         let mut lines: Vec<Line<'static>> = Vec::new();
         let mut pictures: Vec<Picture> = Vec::new();
+        let mut anchor_line = None;
+        let mut buttons = Vec::new();
         for entry in self.entries.iter_mut() {
             let start = lines.len();
+            if self.pending_anchor == Some(entry.id) {
+                anchor_line = Some(start);
+            }
+            if let Block::Image { path, .. } = &entry.block {
+                buttons.push((start + 1, path.clone()));
+            }
             let plan = entry.block.image_plan(area.width);
             lines.extend(entry.lines(area.width, tick).iter().cloned());
             if let Some(plan) = plan {
@@ -350,29 +401,39 @@ impl Scrollback {
                     top: start + plan.skip_lines as usize,
                     plan,
                 });
-            } else if matches!(entry.block, Block::Image { .. }) {
-                // Unreadable file: a framed placeholder stands in, drawn over
-                // the rows the block reserved for it.
-                pictures.push(Picture {
-                    id: entry.id,
-                    top: start + super::block::IMAGE_HEADER_LINES as usize,
-                    plan: ImagePlan {
-                        path: std::path::PathBuf::new(),
-                        cols: area.width.saturating_sub(2).min(28),
-                        rows: 3,
-                        skip_lines: super::block::IMAGE_HEADER_LINES,
-                    },
-                });
             }
         }
         self.total_lines = lines.len();
 
         let max = self.total_lines.saturating_sub(self.viewport);
-        if self.follow {
+        if let Some(start) = anchor_line {
+            self.offset = start.min(max);
+            self.follow = self.offset >= max;
+        } else if self.follow {
             self.offset = max;
         } else {
             self.offset = self.offset.min(max);
         }
+        self.pending_anchor = None;
+
+        let button_width = crate::wrap::display_width(super::block::IMAGE_PREVIEW_BUTTON) as u16;
+        self.image_buttons = buttons
+            .into_iter()
+            .filter_map(|(line, path)| {
+                if line < self.offset || line >= self.offset + self.viewport {
+                    return None;
+                }
+                Some((
+                    Rect::new(
+                        area.x + 2,
+                        area.y + (line - self.offset) as u16,
+                        button_width.min(area.width.saturating_sub(2)),
+                        1,
+                    ),
+                    path,
+                ))
+            })
+            .collect();
 
         let window: Vec<Line<'static>> = lines
             .into_iter()
@@ -440,4 +501,82 @@ struct Picture {
     /// Index of its first pixel row among all laid-out lines.
     top: usize,
     plan: ImagePlan,
+}
+
+#[cfg(test)]
+mod manual_viewport_tests {
+    use super::*;
+
+    fn screen(sb: &mut Scrollback) -> String {
+        let area = Rect::new(0, 0, 48, 10);
+        let mut buf = Buffer::empty(area);
+        sb.render(area, &mut buf, 0);
+        (0..area.height)
+            .flat_map(|y| (0..area.width).map(move |x| (x, y)))
+            .map(|(x, y)| buf[(x, y)].symbol().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn long_passage_starts_at_its_opening_and_stays_put() {
+        let mut sb = Scrollback::new();
+        sb.push(Block::System("old material ".repeat(60)));
+        screen(&mut sb);
+        sb.begin_reading();
+        let text = format!(
+            "OPENING_SENTENCE {} ENDING_SENTENCE",
+            "long paragraph content ".repeat(100)
+        );
+        sb.push(Block::passage_text(&text));
+        sb.push(Block::System("completed".into()));
+        let first = screen(&mut sb);
+        assert!(first.contains("OPENING_SENTENCE"));
+        assert!(!first.contains("ENDING_SENTENCE"));
+        assert!(sb.scrolled_away());
+        assert!(screen(&mut sb).contains("OPENING_SENTENCE"));
+        sb.to_bottom();
+        assert!(screen(&mut sb).contains("ENDING_SENTENCE"));
+    }
+
+    #[test]
+    fn fitting_passage_remains_visible_with_following_status() {
+        let mut sb = Scrollback::new();
+        sb.begin_reading();
+        sb.push(Block::passage_text("Complete short passage."));
+        sb.push(Block::System("completed".into()));
+        assert!(screen(&mut sb).contains("Complete short passage."));
+        assert!(sb.follow);
+        assert_eq!(sb.reading_window(), (48, 7));
+    }
+}
+
+#[cfg(test)]
+mod image_button_tests {
+    use super::*;
+
+    #[test]
+    fn preview_buttons_follow_the_viewport_and_target_the_right_image() {
+        let mut sb = Scrollback::new();
+        sb.push(Block::System("old material ".repeat(100)));
+        let first = std::path::PathBuf::from("/tmp/first.svg");
+        let second = std::path::PathBuf::from("/tmp/second.png");
+        sb.push(Block::image(first.clone(), "第一张图", 16));
+        sb.push(Block::image(second.clone(), "第二张图", 16));
+        let area = Rect::new(4, 3, 48, 10);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 60, 20));
+        sb.render(area, &mut buf, 0);
+        assert_eq!(sb.image_buttons.len(), 2);
+        for (button, path) in &sb.image_buttons {
+            assert_eq!(sb.image_at(button.x, button.y), Some(path.clone()));
+            assert_eq!(sb.image_at(button.x - 1, button.y), None);
+        }
+        sb.to_top();
+        sb.render(area, &mut buf, 0);
+        assert!(
+            sb.image_buttons.is_empty(),
+            "offscreen images must not be clickable"
+        );
+        sb.clear();
+        assert!(sb.image_buttons.is_empty());
+    }
 }

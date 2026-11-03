@@ -1008,6 +1008,8 @@ impl Drop for Speaker {
 }
 
 /// One sentence is no longer coming: keep the in-flight count honest.
+// Keep this API for older supported Rust toolchains; newer Rust renamed it.
+#[allow(deprecated)]
 fn forget(inflight: &AtomicUsize) {
     inflight
         .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {

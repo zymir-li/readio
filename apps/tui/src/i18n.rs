@@ -121,7 +121,7 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("chrome.empty_hint", "导入一本：/import <路径>", "import one: /import <path>"),
     ("chrome.empty_tail", "  ·  /sample 看示例  ·  /help 更多",
         "  ·  /sample for the sample  ·  /help for more"),
-    ("chrome.continue", "⏎ 继续", "⏎ keep reading"),
+    ("chrome.continue", "⏎ 继续", "⏎ continue"),
     ("chrome.idle_tail", "  ·  shift+tab 换模式  ·  /help 更多",
         "  ·  shift+tab cycles modes  ·  /help for more"),
     ("chrome.busy_tail", "  ·  esc 中断  ·  ↑↓ 滚动", "  ·  esc interrupts  ·  ↑↓ to scroll"),
@@ -226,8 +226,8 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("chrome.help_close", " 按任意键关闭", " any key closes"),
 
     // ── prompt placeholders ──
-    ("prompt.reading", "回车或空格继续读，/ 看命令，esc 中断",
-        "enter or space reads on  ·  / for commands  ·  esc interrupts"),
+    ("prompt.reading", "输入命令，或按回车继续",
+        "Enter to continue  ·  / for commands"),
     ("prompt.pick", "输入序号选书，或 /import <路径> 导入",
         "type a number to pick a book, or /import <path>"),
     ("prompt.empty", "readio <文件> 导入一本，或 /sample 试试内置示例",

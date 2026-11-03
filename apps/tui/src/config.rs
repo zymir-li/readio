@@ -26,6 +26,7 @@ use crate::voice::device::Output;
 pub struct Config {
     /// Interface language.
     pub language: Lang,
+    pub appearance: Appearance,
     pub reading: Reading,
     /// Reading pace, worn as an agent's reasoning effort.
     pub effort: EffortConfig,
@@ -41,6 +42,20 @@ pub struct Config {
     /// Diagnostics: append terminal events and sampled voice timing to this
     /// file. Unset normally; enabled when an input or pacing bug needs evidence.
     pub input_log: Option<String>,
+}
+
+/// Display label only; does not configure or contact an AI model.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Appearance {
+    pub model_label: String,
+}
+impl Default for Appearance {
+    fn default() -> Self {
+        Self {
+            model_label: "GPT-6.1 Sol".into(),
+        }
+    }
 }
 
 /// How text is revealed.
@@ -484,9 +499,11 @@ impl Config {
             )
         };
 
+        let appearance = serde_json::to_string(&self.appearance)?;
         Ok(format!(
             "{HEADER}\n\
              language: {lang}\n\
+             appearance: {appearance}\n\
              \n\
              reading:\n\
              {READING_NOTE}\

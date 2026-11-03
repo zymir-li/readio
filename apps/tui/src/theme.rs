@@ -51,36 +51,36 @@ pub struct Theme {
 }
 
 pub const THEME: Theme = Theme {
-    bg_base: rgb(22, 22, 24),
-    bg_soft: rgb(30, 30, 34),
-    bg_code: rgb(28, 28, 32),
+    bg_base: rgb(250, 244, 237),
+    bg_soft: rgb(242, 233, 225),
+    bg_code: rgb(244, 237, 232),
 
-    text_primary: rgb(214, 216, 224),
-    text_secondary: rgb(158, 162, 176),
-    text_muted: rgb(118, 122, 136),
-    text_faint: rgb(84, 88, 100),
+    text_primary: rgb(121, 117, 147),
+    text_secondary: rgb(152, 147, 165),
+    text_muted: rgb(152, 147, 165),
+    text_faint: rgb(181, 175, 178),
 
-    accent_user: rgb(176, 180, 194),
-    accent_agent: rgb(196, 152, 245),
-    accent_thinking: rgb(148, 128, 190),
-    accent_tool: rgb(104, 110, 128),
-    accent_system: rgb(122, 162, 247),
-    accent_running: rgb(196, 152, 245),
-    accent_success: rgb(126, 208, 158),
-    accent_error: rgb(232, 118, 118),
-    accent_warning: rgb(226, 186, 120),
-    accent_plan: rgb(255, 219, 141),
-    accent_model: rgb(116, 199, 196),
+    accent_user: rgb(121, 117, 147),
+    accent_agent: rgb(144, 122, 169),
+    accent_thinking: rgb(176, 149, 189),
+    accent_tool: rgb(152, 147, 165),
+    accent_system: rgb(86, 148, 159),
+    accent_running: rgb(215, 130, 126),
+    accent_success: rgb(126, 168, 128),
+    accent_error: rgb(180, 99, 122),
+    accent_warning: rgb(183, 155, 106),
+    accent_plan: rgb(183, 155, 106),
+    accent_model: rgb(102, 155, 168),
 
-    border: rgb(52, 54, 62),
-    border_focus: rgb(88, 92, 104),
+    border: rgb(223, 218, 215),
+    border_focus: rgb(170, 162, 173),
 
-    bg_speaking: rgb(44, 40, 62),
-    bg_speaking_word: rgb(92, 74, 148),
-    fg_speaking: rgb(242, 240, 248),
+    bg_speaking: rgb(238, 231, 238),
+    bg_speaking_word: rgb(223, 211, 229),
+    fg_speaking: rgb(87, 82, 121),
 
-    bg_selected: rgb(40, 40, 48),
-    fg_latin: rgb(122, 194, 214),
+    bg_selected: rgb(238, 230, 224),
+    fg_latin: rgb(102, 155, 168),
 };
 
 pub fn theme() -> &'static Theme {

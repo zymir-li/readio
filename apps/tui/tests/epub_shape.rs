@@ -233,9 +233,21 @@ fn a_character_offset_outranks_a_stale_chapter_index() {
     app.on_tick();
     terminal.draw(|frame| app.draw(frame)).expect("draw");
     let header = row(&terminal, 0);
+    assert_eq!(
+        app.pos.chapter, 2,
+        "resume must use the saved character offset"
+    );
+    assert_eq!(
+        app.book
+            .as_ref()
+            .unwrap()
+            .chars_before(app.pos.chapter, app.pos.para),
+        target
+    );
+    assert!(header.contains("ctx"), "progress remains visible: {header}");
     assert!(
-        header.contains("3/3"),
-        "the reader should land where the offset says, not where the index says: {header}"
+        !header.contains("3/3"),
+        "personal header hides chapter counts"
     );
 }
 

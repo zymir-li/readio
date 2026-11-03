@@ -48,6 +48,25 @@ pub fn normalize(book: &Book, mut pos: Pos) -> Pos {
 /// when the book is finished, which is also when the steps carry
 /// [`Event::BookComplete`].
 pub fn continue_reading(book: &Book, pos: Pos, resumed: bool) -> (Vec<Step>, Pos) {
+    continue_reading_mode(book, pos, resumed, false)
+}
+
+pub fn continue_reading_mode(
+    book: &Book,
+    pos: Pos,
+    resumed: bool,
+    paragraph: bool,
+) -> (Vec<Step>, Pos) {
+    continue_reading_window(book, pos, resumed, paragraph, (80, 14))
+}
+
+pub fn continue_reading_window(
+    book: &Book,
+    pos: Pos,
+    resumed: bool,
+    paragraph: bool,
+    window: (u16, usize),
+) -> (Vec<Step>, Pos) {
     // A position parked at the end of a chapter rolls forward, so a keypress
     // never produces an empty turn.
     let pos = normalize(book, pos);
@@ -55,19 +74,35 @@ pub fn continue_reading(book: &Book, pos: Pos, resumed: bool) -> (Vec<Step>, Pos
         return (vec![Step::Event(Event::BookComplete)], pos);
     };
 
-    // 1. Decide how much to read.
+    // Measure with the same renderer as the reader. This includes CJK wrapping,
+    // paragraph spacing, headings and code blocks, rather than guessing by bytes.
     let mut end = pos.para;
     let mut chars = 0usize;
+    let mut bodies = 0usize;
     while end < chapter.paras.len() {
         let para = &chapter.paras[end];
-        let len = para.char_count();
-        // A heading only leads a turn; never trail one.
-        if end > pos.para && matches!(para, Para::Heading { .. }) && chars >= MIN_BUDGET {
+        let body = matches!(para, Para::Text(_) | Para::Quote(_) | Para::Code(_));
+        if end > pos.para
+            && matches!(para, Para::Heading { .. })
+            && ((paragraph && bodies > 0) || (!paragraph && chars >= MIN_BUDGET))
+        {
             break;
         }
-        chars += len;
+        let height = if paragraph {
+            rendered_height(&chapter.paras[pos.para..=end], window.0)
+        } else {
+            0
+        };
+        // Keep paragraph boundaries: the first body always fits logically, even
+        // when it is taller than the screen; later bodies wait for another key.
+        if paragraph && bodies > 0 && body && height > window.1.max(1) {
+            break;
+        }
+        chars += para.char_count();
         end += 1;
-        if chars >= READ_BUDGET {
+        bodies += usize::from(body);
+        if (paragraph && body && height >= window.1.max(1)) || (!paragraph && chars >= READ_BUDGET)
+        {
             break;
         }
     }
@@ -183,6 +218,34 @@ pub fn continue_reading(book: &Book, pos: Pos, resumed: bool) -> (Vec<Step>, Pos
         para: next.para,
     });
     (steps, next)
+}
+
+/// The display height of the same text/image runs used when the turn is shown.
+fn rendered_height(paras: &[Para], width: u16) -> usize {
+    use crate::ui::block::{Block, Ctx, Mode};
+    let ctx = Ctx {
+        width,
+        tick: 0,
+        running: false,
+        mode: Mode::Truncated,
+    };
+    runs(paras)
+        .into_iter()
+        .map(|run| {
+            let block = match run {
+                Run::Text(paras) => {
+                    let (text, emphasis) = render_markdown(paras);
+                    Block::Passage {
+                        text,
+                        emphasis,
+                        highlight: None,
+                    }
+                }
+                Run::Image { src, alt } => Block::image(src.clone(), alt.clone(), 16),
+            };
+            block.render(&ctx).len()
+        })
+        .sum()
 }
 
 /// How many hits are listed. More than a dozen locations is a list nobody reads;
@@ -740,5 +803,100 @@ mod narrowing_tests {
     fn a_phrase_that_needs_no_narrowing_produces_nothing_to_try() {
         // Two characters cannot be narrowed further.
         assert!(candidates("记忆").is_empty());
+    }
+}
+
+#[cfg(test)]
+mod paragraph_tests {
+    use super::*;
+
+    fn fixture(paras: Vec<Para>) -> Book {
+        let mut book = Book::load(None).unwrap();
+        book.chapters.truncate(1);
+        book.chapters[0].paras = paras;
+        book
+    }
+
+    #[test]
+    fn manual_chunk_size_responds_to_width_and_height() {
+        let book = fixture(
+            (0..60)
+                .map(|_| {
+                    Para::Text(
+                        "中文正文用于检查窗口换行，宽窗口应该能显示更多内容。"
+                            .repeat(3)
+                            .into(),
+                    )
+                })
+                .collect(),
+        );
+        let (_, narrow) = continue_reading_window(&book, Pos::default(), false, true, (40, 18));
+        let (_, wide) = continue_reading_window(&book, Pos::default(), false, true, (120, 18));
+        let (_, tall) = continue_reading_window(&book, Pos::default(), false, true, (120, 32));
+        assert!(
+            wide.para > narrow.para,
+            "wider viewport should fit more paragraphs"
+        );
+        assert!(
+            tall.para > wide.para,
+            "taller viewport should fit more paragraphs"
+        );
+        assert!(rendered_height(&book.chapters[0].paras[..wide.para], 120) <= 18);
+    }
+
+    #[test]
+    fn manual_short_paragraphs_are_grouped_without_skipping() {
+        let book = fixture(
+            (0..25)
+                .map(|i| {
+                    Para::Text(
+                        format!("第{i}段：这是一段用于检查连续短句合并的正文。下面按顺序继续。 ")
+                            .into(),
+                    )
+                })
+                .collect(),
+        );
+        let (_, first) = continue_reading_mode(&book, Pos::default(), false, true);
+        assert!(first.para > 1 && first.para < 25);
+        let mut pos = Pos::default();
+        while pos.para < 25 {
+            let (_, next) = continue_reading_mode(&book, pos, false, true);
+            assert!(next.para > pos.para && next.para <= 25);
+            pos = next;
+        }
+        assert_eq!(pos.para, 25);
+    }
+
+    #[test]
+    fn manual_long_paragraph_stays_whole_and_separate() {
+        let book = fixture(vec![
+            Para::Text("短句。".into()),
+            Para::Text("长段落内容。".repeat(300).into()),
+            Para::Text("下一段。".into()),
+        ]);
+        let (_, first) = continue_reading_mode(&book, Pos::default(), false, true);
+        assert_eq!(first.para, 1);
+        let (steps, second) = continue_reading_mode(&book, first, false, true);
+        assert_eq!(second.para, 2);
+        assert!(steps.iter().any(
+            |s| matches!(s, Step::Say {text, ..} if text.contains(&"长段落内容。".repeat(300)))
+        ));
+    }
+
+    #[test]
+    fn manual_heading_leads_its_body_instead_of_trailing_previous_chunk() {
+        let book = fixture(vec![
+            Para::Text("上一节的短句。".into()),
+            Para::Heading {
+                level: 2,
+                text: "新小节".into(),
+            },
+            Para::Text("标题后的短句。".into()),
+            Para::Text("第二个短句。".into()),
+        ]);
+        let (_, first) = continue_reading_mode(&book, Pos::default(), false, true);
+        assert_eq!(first.para, 1);
+        let (_, second) = continue_reading_mode(&book, first, false, true);
+        assert_eq!(second.para, 4);
     }
 }

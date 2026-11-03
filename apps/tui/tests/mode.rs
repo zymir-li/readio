@@ -184,8 +184,12 @@ fn unavailable_tts_stays_in_read_aloud_instead_of_falling_back() {
         "without a voice there is no clock allowed to release tokens"
     );
     assert!(
-        view.contains("朗读"),
-        "the mode chip should continue to say what the reader selected:\n{view}"
+        app.speech_enabled(),
+        "voice mode remains selected when unavailable"
+    );
+    assert!(
+        view.contains("model:"),
+        "neutral session footer should remain visible"
     );
     assert_eq!(
         readio::config::Config::load().0.reading.mode,
@@ -201,9 +205,10 @@ fn a_fresh_reader_is_in_manual_mode() {
     let view = draw(&mut app, &mut terminal, 3);
 
     assert_eq!(app.mode(), Mode::Manual);
+    assert!(view.contains("model:"), "neutral footer missing:\n{view}");
     assert!(
-        view.contains("手动"),
-        "the chip should name the mode:\n{view}"
+        !view.contains("▶ 手动"),
+        "personal footer omits the reading-mode chip"
     );
 }
 
