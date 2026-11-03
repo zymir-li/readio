@@ -1,3 +1,5 @@
+> 本分支为个人改造版，默认行为、安装与配置以[仓库首页](../../README.md)为准。下文保留上游说明。
+
 # readio — implementation guide
 
 <sub>For what readio is and how to use it, read the [repository README](https://github.com/hrhrng/readio#readme) ([中文](https://github.com/hrhrng/readio/blob/main/README.zh-CN.md)) — absolute links, because this file also ships inside every release archive. This document is for people changing the code: what the modules are, which invariants they hold, and how the thing is tested and shipped.</sub>

@@ -1,3 +1,67 @@
+# readio · 个人改造版
+
+基于 [hrhrng/readio](https://github.com/hrhrng/readio) 的 `tui-v0.2.0-beta.9`，保留 MIT 许可和上游来源。
+个人分支：[`codex/personal-tui`](https://github.com/zymir-li/readio/tree/codex/personal-tui)。版本：`0.2.0-beta.9+personal.1`。
+
+## 与上游的主要区别
+
+- **立即显示**：手动模式按回车/空格直接展示下一组，不逐字输出，也不等待模拟思考和工具动画。
+- **短回复排版**：长正文按完整句子分组，短句合并，每次通常约 3–6 行；完整句子优先，极长单句和代码块可以超出这个范围。收窄行宽、减弱标题，并默认收起重复的工具预览。
+- **保留原文与进度**：分组只发生在内存中，不改写书籍文件；保留字符顺序和强调范围，以字符坐标恢复旧进度与书签。
+- **浅色配色**：米白背景、灰紫文字、柔和的青色和紫色强调。
+- **会话状态栏**：隐藏书名、作者、章节计数和阅读提示。展示可配置的模型标签、文本 token 估算、当前目录，以及启动时读取的真实 Git 分支和修改标记。
+- **可控滚动**：滚轮/触控板只查看已加载内容，滚到底不会加载下一组；新内容从开头定位，键盘继续功能保留。
+- **图片按钮**：插图位置显示「用预览打开」。macOS 用 Preview 查看，SVG 通过系统 Quick Look 按需生成缓存 PNG；后台处理，不改变阅读位置。Linux 使用 `xdg-open` 交给默认查看器，未在 Linux 实机验证。
+
+模型名称仅是**展示标签**，默认 `GPT-6.1 Sol`；没有接入该模型、发送正文、消耗 API 配额或产生 API 费用。`Usage ~… tok` 是本地文本估算，`ctx` 来自文档进度，并非真实模型计费或上下文窗口。Git 状态是启动时的快照；在非 Git 目录启动时显示 `—`。
+
+## 安装个人版
+
+已有 Rust 工具链时：
+
+```bash
+git clone --branch codex/personal-tui --single-branch https://github.com/zymir-li/readio.git
+cd readio
+cargo install --path apps/tui --locked --force
+readio /path/to/book.epub -l
+```
+
+源码安装通常将程序放在 `~/.cargo/bin`。如果之前在 `~/.local/bin` 安装过上游或手动编译版，请用 `command -v readio` 确认实际运行的程序，避免两个安装位置互相遮盖。
+**下方上游原文中的安装脚本和发行包属于上游，会覆盖或绕过这里的定制。** 本 fork 暂未发布预编译包。
+
+## 配置与操作
+
+配置沿用 `~/.readio/config.yaml`，也可使用 `--home <dir>` 隔离书库、配置和进度。自定义标签：
+
+```yaml
+appearance:
+  model_label: "GPT-6.1 Sol"
+```
+
+改完重启生效。回车/空格继续；方向键、PageUp/PageDown 查看正文；`/toc`、`/find`、`/mark`、`/help` 沿用上游。工具预览可用 `Ctrl+O` 展开；点击图片按钮调用系统查看器。书库、阅读记录、个人配置和预览缓存均留在本机，不属于源码仓库。
+
+## 开发检查
+
+Rust 检查在 `apps/tui` 下执行。上游的语音 worker 测试还需要 Python 的 NumPy 和 Hugging Face Hub，使用临时环境即可，不需要下载语音模型：
+
+```bash
+python3 -m venv /tmp/readio-worker-tests
+/tmp/readio-worker-tests/bin/python -m pip install 'numpy>=1.26,<3' 'huggingface_hub>=0.27,<2'
+cd apps/tui
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+PATH="/tmp/readio-worker-tests/bin:$PATH" cargo test --locked
+cargo build --release --locked
+```
+
+上游 `main` 保留作同步参考，个人改动放在 `codex/personal-tui`；升级时应先比较上游变化再合并，不直接用上游安装器更新个人版。
+
+---
+
+## 上游文档（基线版本原文）
+
+以下描述的是上游行为与安装方式，不代表本个人分支的默认界面。
+
 # readio
 
 **A terminal reader with the interaction grammar of a coding agent.** Press enter and it thinks, issues a tool call, and streams the next passage of your book.
